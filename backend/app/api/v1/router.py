@@ -2,8 +2,9 @@
 
 from datetime import datetime, timezone
 from typing import List, Optional
-from pydantic import BaseModel
-from fastapi import APIRouter, status
+from pydantic import BaseModel, Field
+from fastapi import APIRouter, status, HTTPException
+import httpx
 from app.schemas.telemetry import TelemetryPacket, TelemetryValidationResponse
 from app.schemas.alert import (
     MaintenanceAlert,
@@ -15,7 +16,43 @@ from app.schemas.alert import (
 from app.schemas.machine import MachineSummary, MachineHealthState
 
 api_v1_router = APIRouter()
+class MLPredictionRequest(BaseModel):
+    air_temperature: float
+    process_temperature: float
+    rotational_speed: float
+    torque: float
+    tool_wear: float
+@api_v1_router.post("/ml/predict")
+async def predict_with_ml(readings: MLPredictionRequest):
+    sensor_data = {
+        "Air temperature [K]": readings.air_temperature,
+        "Process temperature [K]": readings.process_temperature,
+        "Rotational speed [rpm]": readings.rotational_speed,
+        "Torque [Nm]": readings.torque,
+        "Tool wear [min]": readings.tool_wear,
+    }
 
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "http://127.0.0.1:8001/predict",
+                json=sensor_data,
+            )
+
+        response.raise_for_status()
+        return response.json()
+
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="The ML API returned an error.",
+        ) from exc
+
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not connect to the ML API.",
+        ) from exc
 
 @api_v1_router.post(
     "/telemetry/validate",
